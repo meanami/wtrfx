@@ -47,6 +47,8 @@ jobs:
               m = re.search(r"(https://cdn\.waterfox\.com/\S+\.tar\.bz2)", pkg)
           assert m, "tarball URL not found in PKGBUILD"
           url = m.group(1).rstrip("'\"")
+          # PKGBUILD uses $pkgver/${pkgver} variables — expand them
+          url = url.replace("${pkgver}", ver).replace("$pkgver", ver).replace("${pkgrel}", rel).replace("$pkgrel", rel)
           # version/URL consistency
           assert ver in url, f"pkgver {ver} not in URL {url}"
           assert re.match(r"^6\.\d+(\.\d+)*$", ver), f"version {ver!r} not stable 6.x"
