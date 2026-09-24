@@ -7,11 +7,21 @@ Upstream: https://github.com/BrowserWorks/waterfox
 
 ## Install
 
+Import the repo signing key (verify the fingerprint out-of-band):
+
+```bash
+curl -fsSL -O https://meanami.github.io/wtrfx/wtrfx.gpg
+gpg --show-keys wtrfx.gpg
+# expected: 788231734BB6FBEC7F1E9003F52AE1EDBE75CFA2
+sudo pacman-key --add wtrfx.gpg
+sudo pacman-key --lsign-key 788231734BB6FBEC7F1E9003F52AE1EDBE75CFA2
+```
+
 Add to `/etc/pacman.conf`:
 
 ```ini
 [wtrfx]
-SigLevel = Optional TrustAll
+SigLevel = Required DatabaseOptional
 Server = https://meanami.github.io/wtrfx/$arch
 ```
 

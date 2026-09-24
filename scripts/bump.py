@@ -69,6 +69,23 @@ def sha512_of_url(url: str) -> str:
     return h.hexdigest()
 
 
+def expected_sha512(url: str) -> str:
+    """Fetch upstream <tarball>.sha512 sidecar published by Waterfox.
+
+    e.g. https://cdn.waterfox.com/.../waterfox-6.7.4.tar.bz2.sha512
+    contains "<hex>  waterfox-6.7.4.tar.bz2". Fail closed if missing.
+    """
+    sidecar = url + ".sha512"
+    print(f"fetching {sidecar} ...", flush=True)
+    req = urllib.request.Request(sidecar, headers={"User-Agent": "wtrfx-bump/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        body = r.read().decode().strip()
+    m = re.search(r"\b([0-9a-fA-F]{128})\b", body)
+    if not m:
+        raise RuntimeError(f"no sha512 found in {sidecar}: {body[:200]!r}")
+    return m.group(1).lower()
+
+
 def update_pkgbuild(new_ver: str, new_sum: str):
     text = PKGBUILD.read_text()
     text = re.sub(r"^pkgver=.*$", f"pkgver={new_ver}", text, count=1, flags=re.M)
@@ -135,8 +152,8 @@ def main():
             forced = a
 
     latest = forced or get_latest_github()
-    if not STABLE_RE.match(latest) and not forced:
-        print(f"upstream tag {latest} does not look stable, aborting", file=sys.stderr)
+    if not STABLE_RE.match(latest):
+        print(f"version {latest!r} does not look stable (want 6.x), aborting", file=sys.stderr)
         sys.exit(1)
     current = get_current()
     print(f"current={current} latest={latest}")
@@ -158,6 +175,15 @@ def main():
         sys.exit(1)
     new_sum = sha512_of_url(url)
     print(f"sha512={new_sum}")
+    try:
+        want = expected_sha512(url)
+    except Exception as e:
+        print(f"upstream .sha512 check failed for {url}: {e}", file=sys.stderr)
+        sys.exit(1)
+    if want != new_sum.lower():
+        print(f"sha512 mismatch: computed {new_sum} != upstream {want}", file=sys.stderr)
+        sys.exit(1)
+    print("sha512 matches upstream .sha512 sidecar")
     update_pkgbuild(latest, new_sum)
     write_srcinfo(latest, new_sum)
     print(f"bumped {current} -> {latest}")

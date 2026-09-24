@@ -1,0 +1,102 @@
+name: verify-bump
+
+# Second CI re-hash check for bump PRs.
+# check-update.yml opens a PR; this workflow independently re-verifies
+# the new PKGBUILD and merges it only after the re-hash passes.
+
+on:
+  pull_request:
+    paths:
+      - "PKGBUILD"
+      - ".SRCINFO"
+      - "scripts/bump.py"
+      - ".github/workflows/verify-bump.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  rehash:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Re-hash tarball + cross-check upstream sidecar + .SRCINFO
+        run: |
+          set -e
+          python3 - <<'PY'
+          import hashlib, re, sys, urllib.request
+          from pathlib import Path
+          pkg = Path("PKGBUILD").read_text()
+          srcinfo = Path(".SRCINFO").read_text()
+          ver = re.search(r"^pkgver=(.+)$", pkg, re.M).group(1).strip()
+          rel = re.search(r"^pkgrel=(.+)$", pkg, re.M).group(1).strip()
+          sums = re.findall(r"'([0-9a-fA-F]{128})'", pkg)
+          assert sums, "no sha512 in PKGBUILD"
+          recorded = sums[0].lower()
+          m = re.search(r"sources?=.*?(https?://\S+waterfox-\S+\.tar\.bz2)", pkg, re.S)
+          if not m:
+              m = re.search(r"(https://cdn\.waterfox\.com/\S+\.tar\.bz2)", pkg)
+          assert m, "tarball URL not found in PKGBUILD"
+          url = m.group(1).rstrip("'\"")
+          # version/URL consistency
+          assert ver in url, f"pkgver {ver} not in URL {url}"
+          assert re.match(r"^6\.\d+(\.\d+)*$", ver), f"version {ver!r} not stable 6.x"
+          assert rel == "1", f"pkgrel should reset to 1 on bump, got {rel}"
+          # 1) upstream sidecar (small, cheap)
+          sidecar = url + ".sha512"
+          print(f"fetching sidecar {sidecar}")
+          req = urllib.request.Request(sidecar, headers={"User-Agent": "wtrfx-verify/1.0"})
+          with urllib.request.urlopen(req, timeout=30) as r:
+              body = r.read().decode().strip()
+          sm = re.search(r"\b([0-9a-fA-F]{128})\b", body)
+          assert sm, f"no sha512 in sidecar: {body[:200]!r}"
+          upstream = sm.group(1).lower()
+          print(f"PKGBUILD: {recorded}\nupstream: {upstream}")
+          assert upstream == recorded, "PKGBUILD hash != upstream .sha512 sidecar"
+          # 2) full re-download + re-hash (second hash, independent of bump job)
+          print(f"downloading {url}")
+          h = hashlib.sha512()
+          req = urllib.request.Request(url, headers={"User-Agent": "wtrfx-verify/1.0"})
+          with urllib.request.urlopen(req, timeout=300) as r:
+              while True:
+                  chunk = r.read(1 << 20)
+                  if not chunk:
+                      break
+                  h.update(chunk)
+          computed = h.hexdigest()
+          print(f"computed: {computed}")
+          assert computed == recorded == upstream, "re-hash mismatch"
+          # 3) .SRCINFO consistency
+          sv = re.search(r"pkgver\s*=\s*(\S+)", srcinfo).group(1)
+          assert sv == ver, f".SRCINFO pkgver {sv} != PKGBUILD {ver}"
+          assert recorded in srcinfo.lower(), ".SRCINFO missing tarball hash"
+          print(f"OK: {ver}-{rel} re-hash matches, .SRCINFO consistent")
+          PY
+
+  automerge:
+    needs: rehash
+    # Gate: only bot bump PRs explicitly labeled automerge. Forks / hand-made
+    # PRs never match, so they still need a human merge.
+    if: startsWith(github.head_ref, 'bump/') && contains(github.event.pull_request.labels.*.name, 'automerge')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge verified bump PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          gh pr merge --squash --delete-branch "$PR"
+          echo "merged #$PR after passing re-hash"

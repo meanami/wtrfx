@@ -7,18 +7,20 @@ on:
       - "PKGBUILD"
       - ".SRCINFO"
       - "waterfox.desktop"
+      - "pacman/wtrfx.gpg"
+      - "pacman/wtrfx.conf"
       - ".github/workflows/build.yml"
   pull_request:
     paths:
       - "PKGBUILD"
       - ".SRCINFO"
       - "waterfox.desktop"
+      - "pacman/wtrfx.gpg"
+      - "pacman/wtrfx.conf"
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: pages
@@ -27,15 +29,17 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     container:
       image: archlinux:latest
-      options: --privileged
     steps:
       - name: Install git
         run: |
           pacman -Sy --noconfirm --needed git base-devel sudo
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Validate .SRCINFO matches PKGBUILD
         run: |
@@ -49,7 +53,7 @@ jobs:
       - name: Create builder user
         run: |
           id builder 2>/dev/null || useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          echo "builder ALL=(ALL) NOPASSWD: /usr/bin/pacman" >> /etc/sudoers
           chown -R builder:builder "$GITHUB_WORKSPACE"
 
       - name: Build package
@@ -73,7 +77,7 @@ jobs:
           namcap PKGBUILD || true
           namcap *.pkg.tar.zst || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pkg
           path: "*.pkg.tar.zst"
@@ -86,23 +90,69 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
-      options: --privileged
+    permissions:
+      contents: write
+      actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: pkg
           path: ./artifacts
 
-      - name: Build pacman repo database
+      - name: Import repo signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          pacman -Sy --noconfirm --needed base-devel git
+          set -e
+          test -n "$GPG_PRIVATE_KEY" || { echo "GPG_PRIVATE_KEY secret is empty"; exit 1; }
+          pacman -Sy --noconfirm --needed gnupg
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys
+          # allow non-interactive signing (works with or without passphrase)
+          echo 'allow-loopback-pinentry' >> ~/.gnupg/gpg-agent.conf
+          gpg-connect-agent reloadagent /bye || true
+
+      - name: Build pacman repo database (signed)
+        env:
+          GPG_KEYID: ${{ secrets.GPG_KEYID }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -e
+          test -n "$GPG_KEYID" || { echo "GPG_KEYID secret is empty"; exit 1; }
+          pacman -Sy --noconfirm --needed base-devel git gnupg
           mkdir -p repo/x86_64
           cp ./artifacts/*.pkg.tar.zst repo/x86_64/
+          # Publish the public key alongside the repo
+          cp pacman/wtrfx.gpg repo/wtrfx.gpg
+          cp pacman/wtrfx.gpg repo/x86_64/wtrfx.gpg
           cd repo/x86_64
-          # repo name: wtrfx (repo-add already creates .db/.files symlinks)
-          repo-add wtrfx.db.tar.gz *.pkg.tar.zst
+          GPG_ARGS=(--batch --yes --pinentry-mode loopback --local-user "$GPG_KEYID")
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            GPG_ARGS+=(--passphrase "$GPG_PASSPHRASE")
+          fi
+          # Detached-sign packages so SigLevel=Required verifies them.
+          # repo-add -s only signs the database, not the .pkg files.
+          for p in *.pkg.tar.zst; do
+            [ -e "$p" ] || continue
+            rm -f "$p.sig"
+            gpg "${GPG_ARGS[@]}" --armor --detach-sign "$p"
+          done
+          # Signed db (creates .db/.files + .sig symlinks)
+          rm -f wtrfx.db.tar.gz wtrfx.db wtrfx.files.tar.gz wtrfx.files
+          rm -f wtrfx.db.tar.gz.sig wtrfx.files.tar.gz.sig
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            echo "$GPG_PASSPHRASE" | repo-add -s --key "$GPG_KEYID" --sign wtrfx.db.tar.gz *.pkg.tar.zst
+          else
+            repo-add -s --key "$GPG_KEYID" --sign wtrfx.db.tar.gz *.pkg.tar.zst
+          fi
+          # Verify before publishing
+          gpg --verify wtrfx.db.tar.gz.sig wtrfx.db.tar.gz
+          repo-add --verify --key "$GPG_KEYID" wtrfx.db.tar.gz
           ls -lh
 
       - name: Generate repo index
@@ -112,13 +162,18 @@ jobs:
           echo "PKGVER=$PKGVER PKGREL=$PKGREL"
           echo "pkgver=$PKGVER" >> "$GITHUB_ENV"
           echo "pkgrel=$PKGREL" >> "$GITHUB_ENV"
+          FPR=$(gpg --show-keys pacman/wtrfx.gpg 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -n1)
+          echo "KEY_FPR=$FPR"
           cat > repo/index.html <<EOF
           <!doctype html><meta charset="utf-8"><title>wtrfx repo</title>
           <h1>wtrfx – waterfox-bin for CachyOS/Arch</h1>
           <p>Version: <b>$PKGVER-$PKGREL</b></p>
-          <p>Add to <code>/etc/pacman.conf</code>:</p>
-          <pre>[wtrfx]
-          SigLevel = Optional TrustAll
+          <p>Signing key: <code>$FPR</code> (<a href="wtrfx.gpg">wtrfx.gpg</a>)</p>
+          <p>Import the key, then add to <code>/etc/pacman.conf</code>:</p>
+          <pre>sudo pacman-key --add wtrfx.gpg
+          sudo pacman-key --lsign-key $FPR
+          [wtrfx]
+          SigLevel = Required DatabaseOptional
           Server = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/\$arch</pre>
           <p><a href="x86_64/">x86_64/</a></p>
           EOF
@@ -137,18 +192,24 @@ jobs:
           } > repo/x86_64/index.html
           cat repo/x86_64/index.html
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: repo-dir
           path: repo
           if-no-files-found: error
 
       - name: Create GitHub Release with package
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ env.pkgver }}-${{ env.pkgrel }}
           name: waterfox-bin ${{ env.pkgver }}-${{ env.pkgrel }}
-          files: ./artifacts/*.pkg.tar.zst
+          files: |
+            ./artifacts/*.pkg.tar.zst
+            repo/x86_64/*.pkg.tar.zst.sig
+            repo/x86_64/wtrfx.db.tar.gz
+            repo/x86_64/wtrfx.db.tar.gz.sig
+            repo/x86_64/wtrfx.files.tar.gz.sig
+            repo/wtrfx.gpg
           fail_on_unmatched_files: true
           generate_release_notes: true
 
@@ -156,6 +217,11 @@ jobs:
     needs: repo
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      actions: read
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -167,14 +233,14 @@ jobs:
           ids=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" --paginate -q '.artifacts[] | select(.name=="github-pages") | .id')
           for id in $ids; do echo "deleting github-pages artifact $id"; gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" || true; done
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: repo-dir
           path: ./repo
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: ./repo
 
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
