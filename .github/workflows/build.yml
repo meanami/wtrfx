@@ -244,3 +244,47 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  notify:
+    needs: [build, repo, deploy]
+    if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: PKGBUILD
+
+      - name: Discord notify on build result
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then echo "no webhook configured, skipping"; exit 0; fi
+          PKGVER=$(grep -oP '^pkgver=\K.*' PKGBUILD)
+          PKGREL=$(grep -oP '^pkgrel=\K.*' PKGBUILD)
+          python3 - "$PKGVER" "$PKGREL" <<'PY'
+          import json, os, sys, urllib.request
+          ver, rel = sys.argv[1], sys.argv[2]
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          needs = json.loads(os.environ.get("NEEDS_JSON", "{}"))
+          results = {k: v.get("result", "unknown") for k, v in needs.items()}
+          failed = any(r in ("failure", "cancelled", "timed_out") for r in results.values())
+          run_url = f"{server}/{repo}/actions/runs/{run_id}"
+          if failed:
+              detail = ", ".join(f"{k}={v}" for k, v in sorted(results.items()))
+              msg = f"FAIL: wtrfx waterfox-bin {ver}-{rel} failed ({detail}).\nRun: {run_url}"
+          else:
+              msg = (f"OK: wtrfx waterfox-bin {ver}-{rel} built, signed and published.\n"
+                     f"Release: {server}/{repo}/releases/tag/v{ver}-{rel}\n"
+                     f"Run: {run_url}")
+          req = urllib.request.Request(os.environ["DISCORD_WEBHOOK_URL"],
+              data=json.dumps({"content": msg}).encode(),
+              headers={"Content-Type": "application/json"})
+          with urllib.request.urlopen(req, timeout=30) as r:
+              print("discord:", r.status)
+          PY
