@@ -147,6 +147,13 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Delete stale github-pages artifacts in this run (re-runs create duplicates)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ids=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" --paginate -q '.artifacts[] | select(.name=="github-pages") | .id')
+          for id in $ids; do echo "deleting github-pages artifact $id"; gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" || true; done
+
       - uses: actions/download-artifact@v4
         with:
           name: repo-dir
