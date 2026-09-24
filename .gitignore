@@ -1,0 +1,7 @@
+*.pkg.tar.zst
+*.pkg.tar.xz
+pkg/
+src/
+*.log
+/tmp/opencode/wtrfx/
+waterfox-*.tar.bz2

@@ -1,0 +1,6 @@
+[waterfox-bin]
+source = "github"
+github = "BrowserWorks/waterfox"
+# only stable 6.x tags, skip betas (G-series is legacy, 6.x is current)
+include_regex = "^6\\.[0-9.]+$"
+use_max_tag = true

@@ -1,0 +1,135 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "PKGBUILD"
+      - ".SRCINFO"
+      - "waterfox.desktop"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "PKGBUILD"
+      - ".SRCINFO"
+      - "waterfox.desktop"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - name: Install git
+        run: |
+          pacman -Sy --noconfirm --needed git base-devel sudo
+
+      - uses: actions/checkout@v4
+
+      - name: Validate .SRCINFO matches PKGBUILD
+        run: |
+          . /etc/os-release 2>/dev/null || true
+          # lightweight check: pkgver in both files must match
+          PKGVER=$(grep -oP '^pkgver=\K.*' PKGBUILD)
+          SRCVER=$(grep -oP '^\s*pkgver =\s*\K.*' .SRCINFO | head -n1)
+          echo "PKGBUILD=$PKGVER .SRCINFO=$SRCVER"
+          test "$PKGVER" = "$SRCVER"
+
+      - name: Create builder user
+        run: |
+          id builder 2>/dev/null || useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build package
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          sudo -u builder makepkg -s --noconfirm --needed
+          ls -lh *.pkg.tar.zst
+
+      - name: Namcap check (non-fatal)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          pacman -S --noconfirm --needed namcap || true
+          namcap PKGBUILD || true
+          namcap *.pkg.tar.zst || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg
+          path: "*.pkg.tar.zst"
+          if-no-files-found: error
+
+  repo:
+    needs: build
+    # only publish repo + release from main pushes, not PRs
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pkg
+          path: ./artifacts
+
+      - name: Build pacman repo database
+        run: |
+          pacman -Sy --noconfirm --needed base-devel git
+          mkdir -p repo/x86_64
+          cp ./artifacts/*.pkg.tar.zst repo/x86_64/
+          cd repo/x86_64
+          # repo name: wtrfx
+          repo-add wtrfx.db.tar.gz *.pkg.tar.zst
+          ls -lh
+          # pacman expects uncompressed .db symlink convention too
+          cp wtrfx.db.tar.gz wtrfx.db
+          cp wtrfx.files.tar.gz wtrfx.files || true
+
+      - name: Generate repo index
+        run: |
+          PKGVER=$(grep -oP '^pkgver=\K.*' PKGBUILD)
+          PKGREL=$(grep -oP '^pkgrel=\K.*' PKGBUILD)
+          echo "PKGVER=$PKGVER PKGREL=$PKGREL"
+          echo "pkgver=$PKGVER" >> "$GITHUB_ENV"
+          echo "pkgrel=$PKGREL" >> "$GITHUB_ENV"
+          cat > repo/index.html <<EOF
+          <!doctype html><meta charset="utf-8"><title>wtrfx repo</title>
+          <h1>wtrfx – waterfox-bin for CachyOS/Arch</h1>
+          <p>Version: <b>$PKGVER-$PKGREL</b></p>
+          <p>Add to <code>/etc/pacman.conf</code>:</p>
+          <pre>[wtrfx]
+          SigLevel = Optional TrustAll
+          Server = https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/\$arch</pre>
+          <p><a href="x86_64/">x86_64/</a></p>
+          EOF
+          cat repo/index.html
+
+      - name: Deploy to GitHub Pages (gh-pages branch)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./repo
+          # single-package repo: overwrite each release, keep history clean
+          keep_files: false
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com
+          commit_message: "repo: waterfox-bin ${{ github.sha }}"
+
+      - name: Create GitHub Release with package
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.pkgver }}-${{ env.pkgrel }}
+          name: waterfox-bin ${{ env.pkgver }}-${{ env.pkgrel }}
+          files: ./artifacts/*.pkg.tar.zst
+          fail_on_unmatched_files: true
+          generate_release_notes: true
