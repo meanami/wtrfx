@@ -123,6 +123,19 @@ jobs:
           <p><a href="x86_64/">x86_64/</a></p>
           EOF
           cat repo/index.html
+          # GitHub Pages has no directory listing, so /x86_64/ 404s without an index.
+          # Generate a simple file listing for browser/Octopi manual downloads.
+          {
+            echo '<!doctype html><meta charset="utf-8"><title>x86_64 – wtrfx</title>'
+            echo "<h1>wtrfx x86_64 ($PKGVER-$PKGREL)</h1><ul>"
+            for f in repo/x86_64/*; do
+              b=$(basename "$f")
+              [ "$b" = "index.html" ] && continue
+              echo "<li><a href=\"$b\">$b</a></li>"
+            done
+            echo '</ul><p><a href="../">../</a></p>'
+          } > repo/x86_64/index.html
+          cat repo/x86_64/index.html
 
       - uses: actions/upload-artifact@v4
         with:
