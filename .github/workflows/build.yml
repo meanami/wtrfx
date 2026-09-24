@@ -17,6 +17,12 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -118,17 +124,11 @@ jobs:
           EOF
           cat repo/index.html
 
-      - name: Deploy to GitHub Pages (gh-pages branch)
-        uses: peaceiris/actions-gh-pages@v4
+      - uses: actions/upload-artifact@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: ./repo
-          # single-package repo: overwrite each release, keep history clean
-          keep_files: false
-          user_name: github-actions[bot]
-          user_email: github-actions[bot]@users.noreply.github.com
-          commit_message: "repo: waterfox-bin ${{ github.sha }}"
+          name: repo-dir
+          path: repo
+          if-no-files-found: error
 
       - name: Create GitHub Release with package
         uses: softprops/action-gh-release@v2
@@ -138,3 +138,23 @@ jobs:
           files: ./artifacts/*.pkg.tar.zst
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  deploy:
+    needs: repo
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: repo-dir
+          path: ./repo
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./repo
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

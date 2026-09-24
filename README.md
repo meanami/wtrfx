@@ -34,4 +34,4 @@ Same deps and install steps as CachyOS (`gtk3`, `libxt`, `startup-notification`,
 
 Daily check via `scripts/bump.py` + `.github/workflows/check-update.yml` opens a PR for new upstream versions and auto-merges it.
 
-Pushes to `main` build with `makepkg` in `.github/workflows/build.yml`, publish to the `gh-pages` branch as a pacman repo, and attach the package to a versioned Release.
+Pushes to `main` build with `makepkg` in `.github/workflows/build.yml`, publish as a pacman repo via GitHub Pages (Actions deployment, handles 100MB+ packages), and attach the package to a versioned Release.
