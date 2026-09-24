@@ -22,6 +22,7 @@ optdepends=('networkmanager: Location detection via available WiFi networks'
   'speech-dispatcher: Text-to-Speech'
   'hunspell-en_US: Spell checking, American English')
 provides=("waterfox=${pkgver}")
+options=('!debug' '!strip')
 source=("waterfox-${pkgver}-${pkgrel}.tar.bz2::https://cdn.waterfox.com/waterfox/releases/${pkgver}/Linux_x86_64/waterfox-${pkgver}.tar.bz2"
   "waterfox.desktop")
 conflicts=('waterfox')

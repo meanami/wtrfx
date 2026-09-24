@@ -111,6 +111,8 @@ def write_srcinfo(new_ver: str, new_sum: str):
 \toptdepends = hunspell-en_US: Spell checking, American English
 \tprovides = waterfox={new_ver}
 \tconflicts = waterfox
+\toptions = !debug
+\toptions = !strip
 \tsource = waterfox-{new_ver}-1.tar.bz2::https://cdn.waterfox.com/waterfox/releases/{new_ver}/Linux_x86_64/waterfox-{new_ver}.tar.bz2
 \tsource = waterfox.desktop
 \tsha512sums = {new_sum}

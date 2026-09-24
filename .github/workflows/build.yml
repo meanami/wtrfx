@@ -51,6 +51,14 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           sudo -u builder makepkg -s --noconfirm --needed
           ls -lh *.pkg.tar.zst
+          # GitHub Artifacts / NTFS reject ':' from epoch (e.g. waterfox-bin-1:6.7.4-1-...).
+          # Rename for upload; Linux pacman/repo-add still work with the dashed name
+          # (.PKGINFO inside still carries epoch=1).
+          for f in *.pkg.tar.zst; do
+            n="${f//:/-}"
+            if [ "$f" != "$n" ]; then mv -v "$f" "$n"; fi
+          done
+          ls -lh *.pkg.tar.zst
 
       - name: Namcap check (non-fatal)
         run: |

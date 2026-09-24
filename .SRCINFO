@@ -22,6 +22,8 @@ pkgbase = waterfox-bin
 	optdepends = hunspell-en_US: Spell checking, American English
 	provides = waterfox=6.7.4
 	conflicts = waterfox
+	options = !debug
+	options = !strip
 	source = waterfox-6.7.4-1.tar.bz2::https://cdn.waterfox.com/waterfox/releases/6.7.4/Linux_x86_64/waterfox-6.7.4.tar.bz2
 	source = waterfox.desktop
 	sha512sums = 170ba79ce0551d69fbe9a42d707339a5632a41dece7d6eedd01ff5d3843dfd75102164d929b96335af626b0c906a14acacea61f029a1b1598098334a53bc98b1
