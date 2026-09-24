@@ -140,7 +140,7 @@ jobs:
           for p in *.pkg.tar.zst; do
             [ -e "$p" ] || continue
             rm -f "$p.sig"
-            gpg "${GPG_ARGS[@]}" --armor --detach-sign "$p"
+            gpg "${GPG_ARGS[@]}" --output "$p.sig" --detach-sign "$p"
           done
           # Signed db (creates .db/.files + .sig symlinks)
           rm -f wtrfx.db.tar.gz wtrfx.db wtrfx.files.tar.gz wtrfx.files
