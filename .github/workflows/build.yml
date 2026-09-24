@@ -198,11 +198,45 @@ jobs:
           path: repo
           if-no-files-found: error
 
+      - name: Fetch upstream Waterfox changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          VER="${{ env.pkgver }}"; REL="${{ env.pkgrel }}"
+          NOTES=""
+          for tag in "$VER" "v$VER"; do
+            if NOTES=$(gh api "repos/BrowserWorks/waterfox/releases/tags/$tag" -q '.body // ""' 2>/dev/null) && [ -n "$NOTES" ]; then
+              echo "found upstream release notes at tag $tag"
+              break
+            fi
+          done
+          {
+            echo "Waterfox-bin $VER-$REL for CachyOS/Arch."
+            echo
+            echo "Upstream release: https://github.com/BrowserWorks/waterfox/releases/tag/$VER"
+            echo
+            echo "Install: see README (import \`wtrfx.gpg\`, \`SigLevel = Required DatabaseOptional\`)."
+            if [ -n "$NOTES" ]; then
+              echo
+              echo "---"
+              echo
+              echo "## Upstream Waterfox changelog"
+              echo
+              printf '%s\n' "$NOTES"
+            else
+              echo
+              echo "(Upstream changelog not found via API; see link above.)"
+            fi
+          } > release-body.md
+          head -c 2000 release-body.md
+
       - name: Create GitHub Release with package
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: v${{ env.pkgver }}-${{ env.pkgrel }}
           name: waterfox-bin ${{ env.pkgver }}-${{ env.pkgrel }}
+          body_path: release-body.md
           files: |
             ./artifacts/*.pkg.tar.zst
             repo/x86_64/*.pkg.tar.zst.sig
