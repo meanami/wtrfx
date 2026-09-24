@@ -292,15 +292,18 @@ jobs:
           sparse-checkout: PKGBUILD
 
       - name: Discord notify on build result
+        continue-on-error: true
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           if [ -z "$DISCORD_WEBHOOK_URL" ]; then echo "no webhook configured, skipping"; exit 0; fi
+          URL="$(printf '%s' "$DISCORD_WEBHOOK_URL" | tr -d '[:space:]')"
+          echo "url_len=${#URL}"
           PKGVER=$(grep -oP '^pkgver=\K.*' PKGBUILD)
           PKGREL=$(grep -oP '^pkgrel=\K.*' PKGBUILD)
           python3 - "$PKGVER" "$PKGREL" <<'PY'
-          import json, os, sys, urllib.request
+          import json, os, sys
           ver, rel = sys.argv[1], sys.argv[2]
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
@@ -316,10 +319,9 @@ jobs:
               msg = (f"OK: wtrfx waterfox-bin {ver}-{rel} built, signed and published.\n"
                      f"Release: {server}/{repo}/releases/tag/v{ver}-{rel}\n"
                      f"Run: {run_url}")
-          req = urllib.request.Request(os.environ["DISCORD_WEBHOOK_URL"],
-              data=json.dumps({"content": msg}).encode(),
-              headers={"Content-Type": "application/json"})
-          with urllib.request.urlopen(req, timeout=30) as r:
-              print("discord:", r.status)
+          with open("/tmp/discord.json", "w") as f:
+              json.dump({"content": msg}, f)
+          print("payload bytes:", len(json.dumps({"content": msg})))
           PY
+          curl -fsSL -X POST -H 'Content-Type: application/json' -d @/tmp/discord.json "$URL" -o /dev/null -w 'discord_http=%{http_code}\n'
 
