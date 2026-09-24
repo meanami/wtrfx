@@ -95,12 +95,9 @@ jobs:
           mkdir -p repo/x86_64
           cp ./artifacts/*.pkg.tar.zst repo/x86_64/
           cd repo/x86_64
-          # repo name: wtrfx
+          # repo name: wtrfx (repo-add already creates .db/.files symlinks)
           repo-add wtrfx.db.tar.gz *.pkg.tar.zst
           ls -lh
-          # pacman expects uncompressed .db symlink convention too
-          cp wtrfx.db.tar.gz wtrfx.db
-          cp wtrfx.files.tar.gz wtrfx.files || true
 
       - name: Generate repo index
         run: |
