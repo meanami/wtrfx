@@ -201,36 +201,73 @@ jobs:
           if-no-files-found: error
 
       - name: Fetch upstream Waterfox changelog
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           VER="${{ env.pkgver }}"; EPOCH="${{ env.epoch }}"
-          NOTES=""
-          for tag in "$VER" "v$VER"; do
-            if NOTES=$(gh api "repos/BrowserWorks/waterfox/releases/tags/$tag" -q '.body // ""' 2>/dev/null) && [ -n "$NOTES" ]; then
-              echo "found upstream release notes at tag $tag"
-              break
-            fi
-          done
-          {
-            echo "Waterfox-bin $EPOCH.$VER for CachyOS/Arch."
-            echo
-            echo "Upstream release: https://github.com/BrowserWorks/waterfox/releases/tag/$VER"
-            echo
-            echo "Install: see README (import \`wtrfx.gpg\`, \`SigLevel = Required DatabaseOptional\`)."
-            if [ -n "$NOTES" ]; then
-              echo
-              echo "---"
-              echo
-              echo "## Upstream Waterfox changelog"
-              echo
-              printf '%s\n' "$NOTES"
-            else
-              echo
-              echo "(Upstream changelog not found via API; see link above.)"
-            fi
-          } > release-body.md
+          python3 - "$VER" "$EPOCH" <<'PY'
+          import html as ihtml, re, sys, urllib.request
+
+          def clean_item(raw):
+              raw = re.sub(r"<img.*?>", "", raw, flags=re.S)
+              raw = re.sub(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                           lambda m: "[%s](%s)" % (
+                               re.sub(r"\s+", " ", ihtml.unescape(
+                                   re.sub(r"<[^>]+>", "", m.group(2)))).strip(),
+                               ("https://www.waterfox.com" + m.group(1).strip()
+                                if m.group(1).strip().startswith("/") else m.group(1).strip())),
+                           raw, flags=re.S)
+              raw = re.sub(r"<(strong|b)>(.*?)</\1>", r"**\2**", raw, flags=re.S)
+              raw = re.sub(r"<code>(.*?)</code>", r"`\1`", raw, flags=re.S)
+              raw = re.sub(r"<[^>]+>", "", raw)
+              return re.sub(r"\s+", " ", ihtml.unescape(raw)).strip()
+          ver, epoch = sys.argv[1], sys.argv[2]
+          page_url = f"https://www.waterfox.com/releases/{ver}/"
+          gh_tag = f"https://github.com/BrowserWorks/waterfox/releases/tag/{ver}"
+          lines = [
+              f"Waterfox-bin {epoch}.{ver} for CachyOS/Arch (upstream {ver}).",
+              "",
+              f"Upstream changelog: {page_url}",
+              f"Upstream tag: {gh_tag}",
+              "",
+              "Install: see README (import `wtrfx.gpg`, `SigLevel = Required DatabaseOptional`).",
+          ]
+          try:
+              req = urllib.request.Request(page_url, headers={"User-Agent": "wtrfx-release/1.0"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  page = r.read().decode("utf-8", "replace")
+              t = re.search(r'<meta property="og:title" content="([^"]+)"', page)
+              d = re.search(r'<meta property="og:description" content="([^"]+)"', page)
+              headline = ihtml.unescape(t.group(1)).strip() if t else ver
+              headline = re.sub(r"^Waterfox\s+", "", headline)
+              headline = re.sub(r"\s*—\s*Release Notes$", "", headline)
+              summary = ihtml.unescape(d.group(1)).strip() if d else ""
+              sections = []
+              pm = re.search(r'<div data-sw-prose.*?>(.*?)</div>\s*</article>', page, re.S)
+              if pm:
+                  parts = re.split(r'<h2[^>]*>(.*?)</h2>', pm.group(1))
+                  for i in range(1, len(parts), 2):
+                      name = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", parts[i])).strip()
+                      body = parts[i + 1] if i + 1 < len(parts) else ""
+                      items = []
+                      for it in re.findall(r"<li[^>]*>(.*?)</li>", body, re.S):
+                          it = clean_item(it)
+                          if it:
+                              items.append(it)
+                      if name and items:
+                          sections.append((name, items))
+              lines += ["", "---", "", f"## Upstream Waterfox changelog — {headline}"]
+              if summary:
+                  lines += ["", summary]
+              for name, items in sections:
+                  lines += ["", f"### {name}", ""]
+                  lines += [f"- {it}" for it in items]
+              print(f"changelog: {headline}, {sum(len(items) for _, items in sections)} items")
+          except Exception as e:
+              print(f"waterfox.com fetch failed: {e}")
+              lines += ["", "(Full changelog: see upstream link above.)"]
+          with open("release-body.md", "w") as f:
+              f.write("\n".join(lines).rstrip() + "\n")
+          PY
           head -c 2000 release-body.md
 
       - name: Create GitHub Release with package
@@ -305,7 +342,21 @@ jobs:
           PKGVER=$(grep -oP '^pkgver=\K.*' PKGBUILD)
           EPOCH=$(grep -oP '^epoch=\K.*' PKGBUILD)
           python3 - "$PKGVER" "$EPOCH" <<'PY'
-          import json, os, sys
+          import datetime, html as ihtml, json, os, re, sys, urllib.request
+
+          def clean_item(raw):
+              raw = re.sub(r"<img.*?>", "", raw, flags=re.S)
+              raw = re.sub(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                           lambda m: "[%s](%s)" % (
+                               re.sub(r"\s+", " ", ihtml.unescape(
+                                   re.sub(r"<[^>]+>", "", m.group(2)))).strip(),
+                               ("https://www.waterfox.com" + m.group(1).strip()
+                                if m.group(1).strip().startswith("/") else m.group(1).strip())),
+                           raw, flags=re.S)
+              raw = re.sub(r"<(strong|b)>(.*?)</\1>", r"**\2**", raw, flags=re.S)
+              raw = re.sub(r"<code>(.*?)</code>", r"`\1`", raw, flags=re.S)
+              raw = re.sub(r"<[^>]+>", "", raw)
+              return re.sub(r"\s+", " ", ihtml.unescape(raw)).strip()
           ver, epoch = sys.argv[1], sys.argv[2]
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
@@ -314,16 +365,107 @@ jobs:
           results = {k: v.get("result", "unknown") for k, v in needs.items()}
           failed = any(r in ("failure", "cancelled", "timed_out") for r in results.values())
           run_url = f"{server}/{repo}/actions/runs/{run_id}"
+          rel_url = f"{server}/{repo}/releases/tag/v{epoch}.{ver}"
+          upstream_page = f"https://www.waterfox.com/releases/{ver}/"
+          GREEN, RED = 3066993, 15158332
+          LOGO = "https://upload.wikimedia.org/wikipedia/commons/2/2a/Waterfox_logo_2019.png"
+          now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+          def fetch_changelog(v):
+              req = urllib.request.Request(
+                  f"https://www.waterfox.com/releases/{v}/",
+                  headers={"User-Agent": "wtrfx-notify/1.0"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  page = r.read().decode("utf-8", "replace")
+              t = re.search(r'<meta property="og:title" content="([^"]+)"', page)
+              d = re.search(r'<meta property="og:description" content="([^"]+)"', page)
+              headline = ihtml.unescape(t.group(1)).strip() if t else v
+              headline = re.sub(r"^Waterfox\s+", "", headline)
+              headline = re.sub(r"\s*—\s*Release Notes$", "", headline)
+              summary = ihtml.unescape(d.group(1)).strip() if d else ""
+              sections = []
+              pm = re.search(r'<div data-sw-prose.*?>(.*?)</div>\s*</article>', page, re.S)
+              if pm:
+                  parts = re.split(r'<h2[^>]*>(.*?)</h2>', pm.group(1))
+                  for i in range(1, len(parts), 2):
+                      name = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", parts[i])).strip()
+                      body = parts[i + 1] if i + 1 < len(parts) else ""
+                      items = []
+                      for it in re.findall(r"<li[^>]*>(.*?)</li>", body, re.S):
+                          it = clean_item(it)
+                          if it:
+                              items.append(it)
+                      if name and items:
+                          sections.append((name, items))
+              return headline, summary, sections
+
           if failed:
               detail = ", ".join(f"{k}={v}" for k, v in sorted(results.items()))
-              msg = f"FAIL: wtrfx waterfox-bin {epoch}.{ver} failed ({detail}).\nRun: {run_url}"
+              payload = {"username": "Waterfox", "avatar_url": LOGO, "embeds": [{
+                  "title": f"❌ waterfox-bin {epoch}.{ver} build failed",
+                  "description": f"{detail}\n\n[View run]({run_url})",
+                  "color": RED,
+                  "footer": {"text": "wtrfx • Arch/CachyOS repo"},
+                  "timestamp": now,
+              }]}
           else:
-              msg = (f"OK: wtrfx waterfox-bin {epoch}.{ver} built, signed and published.\n"
-                     f"Release: {server}/{repo}/releases/tag/v{epoch}.{ver}\n"
-                     f"Run: {run_url}")
+              try:
+                  headline, summary, sections = fetch_changelog(ver)
+              except Exception as e:
+                  print(f"changelog fetch failed: {e}")
+                  headline, summary, sections = ver, "", []
+              codename = headline[len(ver):].lstrip(" —-") if headline.startswith(ver) else headline
+              title = f"waterfox-bin {epoch}.{ver}" + (f" — {codename}" if codename else "")
+              links = f"[Full changelog]({upstream_page}) • [Release]({rel_url}) • [Run]({run_url})"
+              header_desc = summary.strip() if summary else ""
+              embeds = [{
+                  "title": title[:256],
+                  "url": upstream_page,
+                  "description": header_desc[:4096],
+                  "color": GREEN,
+              }]
+              if not header_desc:
+                  del embeds[0]["description"]
+              # one embed per changelog section (Discord: max 10 embeds, 6000 chars total)
+              budget = 6000 - len(header_desc) - 500
+              slots = 10 - len(embeds)
+              if len(sections) > slots:
+                  shown, hidden = sections[:slots - 1], sections[slots - 1:]
+              else:
+                  shown, hidden = sections, []
+              for name, items in shown:
+                  if budget <= 200:
+                      hidden = [(name, items)] + hidden
+                      break
+                  cap = min(3500, budget)
+                  rows, total, cut = [], 0, False
+                  for it in items:
+                      row = f"- {it}"
+                      if rows and total + len(row) + 1 > cap:
+                          cut = True
+                          break
+                      rows.append(row)
+                      total += len(row) + 1
+                  if cut:
+                      rows.append("…")
+                  if not rows:  # single huge item: hard-truncate as last resort
+                      rows = [f"- {items[0][:cap - 3]}…"]
+                  body = "\n".join(rows)
+                  embeds.append({"title": name[:256], "description": body, "color": GREEN})
+                  budget -= len(body)
+              if hidden:
+                  names = ", ".join(n for n, _ in hidden)
+                  embeds.append({
+                      "title": "More",
+                      "description": f"Also in this release: {names}\n\n{links}",
+                      "color": GREEN,
+                  })
+              embeds[-1]["footer"] = {"text": "wtrfx • Arch/CachyOS repo"}
+              embeds[-1]["timestamp"] = now
+              payload = {"username": "Waterfox", "avatar_url": LOGO, "embeds": embeds}
           with open("/tmp/discord.json", "w") as f:
-              json.dump({"content": msg}, f)
-          print("payload bytes:", len(json.dumps({"content": msg})))
+              json.dump(payload, f)
+          print("payload bytes:", len(json.dumps(payload)))
           PY
           curl -fsSL -X POST -H 'Content-Type: application/json' -d @/tmp/discord.json "$URL" -o /dev/null -w 'discord_http=%{http_code}\n'
 
