@@ -6,7 +6,7 @@
 # shellcheck shell=bash disable=SC2034,SC2154
 
 pkgname=waterfox-bin
-epoch=1
+epoch=2
 pkgver=6.7.5
 pkgrel=1
 pkgdesc="Current/modern generation of customizable privacy-conscious web browser."

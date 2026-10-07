@@ -61,9 +61,9 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           sudo -u builder makepkg -s --noconfirm --needed
           ls -lh *.pkg.tar.zst
-          # GitHub Artifacts / NTFS reject ':' from epoch (e.g. waterfox-bin-1:6.7.4-1-...).
+          # GitHub Artifacts / NTFS reject ':' from epoch (e.g. waterfox-bin-2:6.7.5-1-...).
           # Rename for upload; Linux pacman/repo-add still work with the dashed name
-          # (.PKGINFO inside still carries epoch=1).
+          # (.PKGINFO inside still carries epoch=2).
           for f in *.pkg.tar.zst; do
             n="${f//:/-}"
             if [ "$f" != "$n" ]; then mv -v "$f" "$n"; fi
@@ -159,15 +159,17 @@ jobs:
         run: |
           PKGVER=$(grep -oP '^pkgver=\K.*' PKGBUILD)
           PKGREL=$(grep -oP '^pkgrel=\K.*' PKGBUILD)
-          echo "PKGVER=$PKGVER PKGREL=$PKGREL"
+          EPOCH=$(grep -oP '^epoch=\K.*' PKGBUILD)
+          echo "PKGVER=$PKGVER PKGREL=$PKGREL EPOCH=$EPOCH"
           echo "pkgver=$PKGVER" >> "$GITHUB_ENV"
           echo "pkgrel=$PKGREL" >> "$GITHUB_ENV"
+          echo "epoch=$EPOCH" >> "$GITHUB_ENV"
           FPR=$(gpg --show-keys pacman/wtrfx.gpg 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -n1)
           echo "KEY_FPR=$FPR"
           cat > repo/index.html <<EOF
           <!doctype html><meta charset="utf-8"><title>wtrfx repo</title>
           <h1>wtrfx – waterfox-bin for CachyOS/Arch</h1>
-          <p>Version: <b>$PKGVER-$PKGREL</b></p>
+          <p>Version: <b>$EPOCH.$PKGVER</b></p>
           <p>Signing key: <code>$FPR</code> (<a href="wtrfx.gpg">wtrfx.gpg</a>)</p>
           <p>Import the key, then add to <code>/etc/pacman.conf</code>:</p>
           <pre>sudo pacman-key --add wtrfx.gpg
@@ -182,7 +184,7 @@ jobs:
           # Generate a simple file listing for browser/Octopi manual downloads.
           {
             echo '<!doctype html><meta charset="utf-8"><title>x86_64 – wtrfx</title>'
-            echo "<h1>wtrfx x86_64 ($PKGVER-$PKGREL)</h1><ul>"
+            echo "<h1>wtrfx x86_64 ($EPOCH.$PKGVER)</h1><ul>"
             for f in repo/x86_64/*; do
               b=$(basename "$f")
               [ "$b" = "index.html" ] && continue
@@ -203,7 +205,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          VER="${{ env.pkgver }}"; REL="${{ env.pkgrel }}"
+          VER="${{ env.pkgver }}"; EPOCH="${{ env.epoch }}"
           NOTES=""
           for tag in "$VER" "v$VER"; do
             if NOTES=$(gh api "repos/BrowserWorks/waterfox/releases/tags/$tag" -q '.body // ""' 2>/dev/null) && [ -n "$NOTES" ]; then
@@ -212,7 +214,7 @@ jobs:
             fi
           done
           {
-            echo "Waterfox-bin $VER-$REL for CachyOS/Arch."
+            echo "Waterfox-bin $EPOCH.$VER for CachyOS/Arch."
             echo
             echo "Upstream release: https://github.com/BrowserWorks/waterfox/releases/tag/$VER"
             echo
@@ -234,8 +236,8 @@ jobs:
       - name: Create GitHub Release with package
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: v${{ env.pkgver }}-${{ env.pkgrel }}
-          name: waterfox-bin ${{ env.pkgver }}-${{ env.pkgrel }}
+          tag_name: v${{ env.epoch }}.${{ env.pkgver }}
+          name: waterfox-bin ${{ env.epoch }}.${{ env.pkgver }}
           body_path: release-body.md
           files: |
             ./artifacts/*.pkg.tar.zst
@@ -301,10 +303,10 @@ jobs:
           URL="$(printf '%s' "$DISCORD_WEBHOOK_URL" | tr -d '[:space:]')"
           echo "url_len=${#URL}"
           PKGVER=$(grep -oP '^pkgver=\K.*' PKGBUILD)
-          PKGREL=$(grep -oP '^pkgrel=\K.*' PKGBUILD)
-          python3 - "$PKGVER" "$PKGREL" <<'PY'
+          EPOCH=$(grep -oP '^epoch=\K.*' PKGBUILD)
+          python3 - "$PKGVER" "$EPOCH" <<'PY'
           import json, os, sys
-          ver, rel = sys.argv[1], sys.argv[2]
+          ver, epoch = sys.argv[1], sys.argv[2]
           repo = os.environ.get("GITHUB_REPOSITORY", "")
           server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
           run_id = os.environ.get("GITHUB_RUN_ID", "")
@@ -314,10 +316,10 @@ jobs:
           run_url = f"{server}/{repo}/actions/runs/{run_id}"
           if failed:
               detail = ", ".join(f"{k}={v}" for k, v in sorted(results.items()))
-              msg = f"FAIL: wtrfx waterfox-bin {ver}-{rel} failed ({detail}).\nRun: {run_url}"
+              msg = f"FAIL: wtrfx waterfox-bin {epoch}.{ver} failed ({detail}).\nRun: {run_url}"
           else:
-              msg = (f"OK: wtrfx waterfox-bin {ver}-{rel} built, signed and published.\n"
-                     f"Release: {server}/{repo}/releases/tag/v{ver}-{rel}\n"
+              msg = (f"OK: wtrfx waterfox-bin {epoch}.{ver} built, signed and published.\n"
+                     f"Release: {server}/{repo}/releases/tag/v{epoch}.{ver}\n"
                      f"Run: {run_url}")
           with open("/tmp/discord.json", "w") as f:
               json.dump({"content": msg}, f)

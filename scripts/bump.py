@@ -108,7 +108,7 @@ def write_srcinfo(new_ver: str, new_sum: str):
 \tpkgdesc = Current/modern generation of customizable privacy-conscious web browser.
 \tpkgver = {new_ver}
 \tpkgrel = 1
-\tepoch = 1
+\tepoch = 2
 \turl = https://www.waterfox.net
 \tarch = x86_64
 \tlicense = MPL-2.0
