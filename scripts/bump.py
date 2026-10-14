@@ -9,8 +9,10 @@
 """
 import hashlib
 import json
+import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -25,10 +27,29 @@ CDN_TPL = "https://cdn.waterfox.com/waterfox/releases/{ver}/Linux_x86_64/waterfo
 STABLE_RE = re.compile(r"^6\.\d+(\.\d+)*$")
 
 
-def http_json(url: str):
-    req = urllib.request.Request(url, headers={"User-Agent": "wtrfx-bump/1.0", "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+def _github_headers() -> dict:
+    headers = {"User-Agent": "wtrfx-bump/1.0", "Accept": "application/vnd.github+json"}
+    # Authenticated API calls get 5000 req/h instead of 60 — required now
+    # that check-update runs hourly (plus shared runner-IP quota pressure).
+    tok = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    return headers
+
+
+def http_json(url: str, retries: int = 3):
+    last: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, headers=_github_headers())
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode())
+        except Exception as e:
+            last = e
+            print(f"GET {url} attempt {attempt}/{retries} failed: {e}", file=sys.stderr)
+            if attempt < retries:
+                time.sleep(2 ** (attempt - 1))
+    raise RuntimeError(f"GET {url} failed after {retries} tries: {last}")
 
 
 def get_latest_github() -> str:

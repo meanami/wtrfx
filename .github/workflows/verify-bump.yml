@@ -10,14 +10,20 @@ on:
       - "PKGBUILD"
       - ".SRCINFO"
       - "scripts/bump.py"
+      - "scripts/verify.py"
       - ".github/workflows/verify-bump.yml"
 
 permissions:
   contents: read
 
+concurrency:
+  group: verify-bump-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   rehash:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -29,60 +35,10 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Logic lives in scripts/verify.py (single source of truth) —
+      # sidecar cross-check + full re-download re-hash + .SRCINFO checks.
       - name: Re-hash tarball + cross-check upstream sidecar + .SRCINFO
-        run: |
-          set -e
-          python3 - <<'PY'
-          import hashlib, re, sys, urllib.request
-          from pathlib import Path
-          pkg = Path("PKGBUILD").read_text()
-          srcinfo = Path(".SRCINFO").read_text()
-          ver = re.search(r"^pkgver=(.+)$", pkg, re.M).group(1).strip()
-          rel = re.search(r"^pkgrel=(.+)$", pkg, re.M).group(1).strip()
-          sums = re.findall(r"'([0-9a-fA-F]{128})'", pkg)
-          assert sums, "no sha512 in PKGBUILD"
-          recorded = sums[0].lower()
-          m = re.search(r"sources?=.*?(https?://\S+waterfox-\S+\.tar\.bz2)", pkg, re.S)
-          if not m:
-              m = re.search(r"(https://cdn\.waterfox\.com/\S+\.tar\.bz2)", pkg)
-          assert m, "tarball URL not found in PKGBUILD"
-          url = m.group(1).rstrip("'\"")
-          # PKGBUILD uses $pkgver/${pkgver} variables — expand them
-          url = url.replace("${pkgver}", ver).replace("$pkgver", ver).replace("${pkgrel}", rel).replace("$pkgrel", rel)
-          # version/URL consistency
-          assert ver in url, f"pkgver {ver} not in URL {url}"
-          assert re.match(r"^6\.\d+(\.\d+)*$", ver), f"version {ver!r} not stable 6.x"
-          assert rel == "1", f"pkgrel should reset to 1 on bump, got {rel}"
-          # 1) upstream sidecar (small, cheap)
-          sidecar = url + ".sha512"
-          print(f"fetching sidecar {sidecar}")
-          req = urllib.request.Request(sidecar, headers={"User-Agent": "wtrfx-verify/1.0"})
-          with urllib.request.urlopen(req, timeout=30) as r:
-              body = r.read().decode().strip()
-          sm = re.search(r"\b([0-9a-fA-F]{128})\b", body)
-          assert sm, f"no sha512 in sidecar: {body[:200]!r}"
-          upstream = sm.group(1).lower()
-          print(f"PKGBUILD: {recorded}\nupstream: {upstream}")
-          assert upstream == recorded, "PKGBUILD hash != upstream .sha512 sidecar"
-          # 2) full re-download + re-hash (second hash, independent of bump job)
-          print(f"downloading {url}")
-          h = hashlib.sha512()
-          req = urllib.request.Request(url, headers={"User-Agent": "wtrfx-verify/1.0"})
-          with urllib.request.urlopen(req, timeout=300) as r:
-              while True:
-                  chunk = r.read(1 << 20)
-                  if not chunk:
-                      break
-                  h.update(chunk)
-          computed = h.hexdigest()
-          print(f"computed: {computed}")
-          assert computed == recorded == upstream, "re-hash mismatch"
-          # 3) .SRCINFO consistency
-          sv = re.search(r"pkgver\s*=\s*(\S+)", srcinfo).group(1)
-          assert sv == ver, f".SRCINFO pkgver {sv} != PKGBUILD {ver}"
-          assert recorded in srcinfo.lower(), ".SRCINFO missing tarball hash"
-          print(f"OK: {ver}-{rel} re-hash matches, .SRCINFO consistent")
-          PY
+        run: python3 scripts/verify.py
 
   automerge:
     needs: rehash
@@ -90,15 +46,49 @@ jobs:
     # PRs never match, so they still need a human merge.
     if: startsWith(github.head_ref, 'bump/') && contains(github.event.pull_request.labels.*.name, 'automerge')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
       pull-requests: write
     steps:
       - name: Merge verified bump PR
         env:
+          # PAT so the merge commit triggers build.yml on main.
           GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -e
-          gh pr merge --squash --delete-branch "$PR"
+          # Prefer native auto-merge (waits for any remaining checks);
+          # fall back to immediate merge if auto-merge isn't enabled.
+          gh pr merge --auto --squash --delete-branch "$PR" \
+            || gh pr merge --squash --delete-branch "$PR"
           echo "merged #$PR after passing re-hash"
+
+  notify-failure:
+    needs: [rehash, automerge]
+    if: failure() && startsWith(github.head_ref, 'bump/') && contains(github.event.pull_request.labels.*.name, 'automerge')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Discord notify on verify failure
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then echo "no webhook configured, skipping"; exit 0; fi
+          python3 - <<'PY'
+          import json, os, urllib.request
+          pr_url = os.environ.get("PR_URL", "")
+          payload = {"embeds": [{
+              "title": "verify-bump failed",
+              "description": f"Re-hash or automerge failed — needs a human look.\n\n[View PR]({pr_url})",
+              "color": 15158332,
+          }]}
+          data = json.dumps(payload).encode()
+          req = urllib.request.Request(
+              os.environ["DISCORD_WEBHOOK_URL"], data=data,
+              headers={"Content-Type": "application/json"})
+          with urllib.request.urlopen(req, timeout=30):
+              pass
+          print("notified")
+          PY

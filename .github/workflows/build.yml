@@ -28,7 +28,15 @@ concurrency:
 
 jobs:
   build:
+    # Bump PRs are already re-hash-verified by verify-bump.yml, and the full
+    # build runs again on merge to main. Skipping here avoids the heavy Arch
+    # build (and its approval gate) sitting on every hourly bump PR.
+    if: >-
+      github.event_name != 'pull_request' ||
+      !(startsWith(github.head_ref, 'bump/') &&
+        contains(github.event.pull_request.labels.*.name, 'automerge'))
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: write
@@ -88,6 +96,7 @@ jobs:
     # only publish repo + release from main pushes, not PRs
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: archlinux:latest
     permissions:
@@ -290,6 +299,7 @@ jobs:
     needs: repo
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pages: write
@@ -322,6 +332,7 @@ jobs:
     needs: [build, repo, deploy]
     if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
