@@ -2,7 +2,7 @@ name: check-update
 
 on:
   schedule:
-    - cron: "0 */4 * * *" # every 4 hours
+    - cron: "0 * * * *" # every hour
   workflow_dispatch:
     inputs:
       version:
@@ -59,7 +59,7 @@ jobs:
         if: steps.bump.outputs.bumped == 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.AUTOMERGE_PAT }}
           commit-message: "bump waterfox-bin to ${{ steps.bump.outputs.version }}"
           branch: bump/waterfox-${{ steps.bump.outputs.version }}
           delete-branch: true
